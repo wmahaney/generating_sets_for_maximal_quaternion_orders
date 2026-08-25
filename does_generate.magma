@@ -628,8 +628,8 @@ procedure sweep_check_diameter_generation(p_min, p_max, l
     while p le p_max do
         if p ne l then
             steps := Ceiling(Log(l, p));
-            k := 2*steps + 1;
-
+            //Sebastian & Sebastiano Diameter Bound
+            k := 1 + 2*Ceiling(Log(l, ((p-1)/Sqrt(6))));
             O := QuaternionOrder(p);
             O := random_walk(O : steps := steps);
 
