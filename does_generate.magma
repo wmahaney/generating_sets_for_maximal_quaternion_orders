@@ -2,16 +2,54 @@
 ================================================================================
   Bound-error and generation experiments for quaternion orders in B_{p,infty}
 
-  Section order (functions are defined before first use so the file loads
-  top-to-bottom):
+  ------------------------------------------------------------------------------
+  Conventions
+  ------------------------------------------------------------------------------
+  * Discriminant(O) for a quaternion order is the REDUCED discriminant.  The
+    five order classes studied here are recognised purely from Discrd(O), and
+    each carries a numeric label N (an index into ORDER_TYPES):
 
+        N = 1   "maximal"    Discrd = p
+        N = 2   "index_p"    Discrd = p^2      (Eichler of level p)
+        N = 3   "index_p2"   Discrd = p^3
+        N = 4   "index_q"    Discrd = p*q      (Eichler of level q, q ne p)
+        N = 5   "index_q2"   Discrd = p*q^2
+
+    Every function taking a class argument accepts either the integer N or the
+    string label.
+
+  * l is always a prime different from p.  Argument order is always (p, l, k).
+
+  * The normalised bound error ("ratio", "eps") is
+
+        eps_{l^k}(O) = |a_{l^k}(O) - g_{l^k}(O)|
+                       / ( #Units(O) * 2 * k * l^((k+2)/2) )
+
+    with a_{l^k}(O) = #{x in O : Nrd(x) = l^k} and
+
+        g_{l^k}(O) = lambda_{l^k}(e)/lambda_0(e)                  (1 genus vector)
+        g_{l^k}(O) = lambda_{l^k}(e)/lambda_0(e)*(1 + (l^k | p))  (2 genus vectors)
+
+    so that eps <= 1 is EXACTLY the statement
+
+        g_{l^k} - #Units(O)*2*k*l^((k+2)/2)
+            <= a_{l^k}(O) <=
+        g_{l^k} + #Units(O)*2*k*l^((k+2)/2).
+
+    Every battery below therefore also reports "violations" = #{eps > 1}.
+
+  ------------------------------------------------------------------------------
+  Section order (definitions precede first use; the file loads top to bottom)
+  ------------------------------------------------------------------------------
     0. Configuration
-    1. Auxiliary functions       (norm counting, generation test, bound error)
-    2. Order construction        (maximal / submaximal types, random walk)
-    3. Data printing             (Python-compatible output)
-    4. Single-prime tests        (bound tests, phase-change check)
-    5. Sweeps                    (ranges of p)
-    6. Scratch / driver          (commented out)
+    1. Auxiliary functions      (norm counting, generation test)
+    2. Order construction       (five classes, random walk)
+    3. Bound error              (mass, Hecke eigenvalue, eps)
+    4. Batteries                (samples -> mean / max / violation count)
+    5. Printing                 (Python-compatible output)
+    6. Sweeps                   (ranges of p)
+    7. Generation experiments   (diameter heuristic, phase change)
+    8. Driver                   (commented out)
 ================================================================================
 */
 
@@ -22,7 +60,35 @@
 ================================================================================
 */
 
-sweep_q_candidates := [5, 7, 11, 13, 17, 19, 23, 29, 31];
+// Auxiliary level primes q for the "index_q" / "index_q2" classes.
+DEFAULT_Q_CANDIDATES := [5, 7, 11, 13, 17, 19, 23, 29, 31];
+
+// Primes used as step lengths in the random walk.  Steps whose prime divides
+// Discrd(O) are discarded automatically (see random_walk).
+DEFAULT_WALK_PRIMES := [2, 3, 5, 7, 11, 13, 17, 19, 23, 29];
+
+// Class labels; the position in this sequence is the numeric label N.
+ORDER_TYPES := ["maximal", "index_p", "index_p2", "index_q", "index_q2"];
+
+
+function order_type_name(N)
+    // Numeric class label -> string label.
+    error if not (N in [1 .. #ORDER_TYPES]),
+        Sprintf("order class N must lie in [1 .. %o]", #ORDER_TYPES);
+    return ORDER_TYPES[N];
+end function;
+
+
+function normalise_type(type)
+    // Accept either the integer N or the string label; return the string.
+    if Type(type) eq RngIntElt then
+        return order_type_name(type);
+    end if;
+    error if not (type in ORDER_TYPES),
+        Sprintf("unknown order class \"%o\"; expected one of %o",
+                type, ORDER_TYPES);
+    return type;
+end function;
 
 
 /*
@@ -32,594 +98,694 @@ sweep_q_candidates := [5, 7, 11, 13, 17, 19, 23, 29, 31];
 */
 
 function count_prime_power_norm(O, l, k)
-    // Returns the number of elements of O of norm l^k, counting negatives.
+    /*
+      a_{l^k}(O) = #{x in O : Nrd(x) = l^k}, counting x and -x separately.
+      Enumerate returns one representative of each pair {x, -x}, hence the 2.
+    */
+    error if not IsPrime(l), "l must be prime";
     if k lt 0 then
         return 0;
     end if;
-    if not IsPrime(l) then
-        error "l must be prime";
-    end if;
-
     return 2*#Enumerate(O, l^k, l^k);
 end function;
 
 
-function prime_power_norm_generates(O, l, k)
-    // Test whether the elements of O of norm l^k generate O as a ring.
+function norm_l_power_index(O, l, k)
+    /*
+      Index in O of the Z-module spanned by 1 together with every element of
+      reduced norm l^k.  Returns 0 if that span has rank < 4.
+
+      Eltseq of an element of a quaternion order gives its coordinates with
+      respect to the basis of the order, so the matrix below is integral and
+      the Hermite form is taken over Z.
+    */
+    error if not IsPrime(l), "l must be prime";
     if k lt 0 then
-        return false;
-    end if;
-    if not IsPrime(l) then
-        error "l must be prime";
+        return 0;
     end if;
 
-    test_set := [One(O)] cat Enumerate(O, l^k, l^k);
-    vecs := [Eltseq(x) : x in test_set];
-    H, _ := HermiteForm(Matrix(Integers(), vecs));
-    H_rows := RowSequence(H);
-    delete H;
-    delete vecs;
+    spanners := [One(O)] cat Enumerate(O, l^k, l^k);
+    M := Matrix(Integers(), [Eltseq(x) : x in spanners]);
+    delete spanners;
+    H := HermiteForm(M);
+    delete M;
 
-    if #H_rows ge 4 then
-        LLL_basis := [H_rows[1], H_rows[2], H_rows[3], H_rows[4]];
-        M := Matrix(Integers(), LLL_basis);
-        return Determinant(M) eq 1;
-    else
-        return false;
+    if Nrows(H) lt 4 then
+        return 0;
     end if;
+    return AbsoluteValue(Determinant(Submatrix(H, 1, 1, 4, 4)));
 end function;
 
 
-/*
-  Instead of measuring the bounds on rep numbers compared to the norm counts, we
-  can instead compute the error
-      |a_{l^k}(O) - g_{l^k}| / ( #Units(O) * 2 * k * l^{(k+2)/2} )
-  for
-      g_{l^k}(O) = lambda_{l^k}(O)/lambda_0(O)        (M_G(O) one dimensional)
-      g_{l^k}(O) = (lambda_{l^k}(e) + lambda_{l^k}(e'))/lambda_0(e)
-                 = lambda_{l^k}(e)/lambda_0(e) * (1 + LegendreSymbol(l^k, p))
+function prime_power_norm_generates(O, l, k)
+    /*
+      Test whether the elements of norm l^k generate O.
 
-  In general
-      g_{l^k} - #Units(O)*2*k*l^((k+2)/2)
-          <= a_{l^k}(O) <=
-      g_{l^k} + #Units(O)*2*k*l^((k+2)/2).
-*/
-
-function check_bound_error(O, p, l, k)
-    // Measure how much bigger g_{l^k} + ... is than a_{l^k}(O) when O is
-    // maximal or submaximal, i.e. Discrd(O) in {p, p^2, p^3, pq, pq^2}.
-    D := Discriminant(O);
-    if l eq p then
-        error "l must not be ramified in the quaternion algebra containing O";
-    end if;
-
-    // O has one genus vector if O is maximal (discriminant p), Eichler
-    // (discriminant pq), of discriminant p^3, or of discriminant pq^2.
-    // O has two genus vectors if O has discriminant p^2.
-
-    // lambda_0(e) given by figure (22) as
-    //     EulerPhi(Discriminant(QuaternionAlgebra(O)))/24 * (correction factor)
-    lambda_0_e := EulerPhi(Discriminant(QuaternionAlgebra(O)))/24;
-
-    correction_factor := 1;
-    if D eq p then                              // maximal
-        correction_factor := 1;
-    elif IsPrime(D div p) then                  // Eichler, D = pq
-        correction_factor := 1 + PrimeDivisors(D div p)[1];
-    elif D eq p^2 then                          // index p
-        correction_factor := p + 1;
-    elif D eq p^3 then
-        correction_factor := p^2;
-    else                                        // index pq^2
-        q := PrimeDivisors(D div p)[1];
-        correction_factor := q*(q - 1);
-    end if;
-    lambda_0_e := lambda_0_e*correction_factor;
-
-    // lambda_{l^k}(e)
-    lambda_lk_e := 0;
-    if not l in Divisors(D) then                // O is maximal at l
-        lambda_lk_e := ( l^(k+1) - 1 )/( l - 1 );
-    elif D/p eq l then
-        lambda_lk_e := -1 + 2*( ( l^(k+1) - 1 )/( l - 1 ) );
-    else                                        // D/p eq q^2
-        lambda_lk_e := l^k - l;
-    end if;
-
-    if D eq p^2 then                            // O has 2 genus vectors
-        glk := ( lambda_lk_e/lambda_0_e )*( 1 + JacobiSymbol(l^k, p) );
-    else
-        glk := lambda_lk_e/lambda_0_e;
-    end if;
-
-    alk := count_prime_power_norm(O, l, k);
-
-    return AbsoluteValue(alk - glk)/( 2*k*l^((k+2)/2)*#Units(O) );
+      Caveat: this checks Z-module generation, which is sufficient but not
+      necessary for ring generation.  A `false` therefore only says that this
+      particular certificate failed.
+    */
+    return norm_l_power_index(O, l, k) eq 1;
 end function;
 
 
 /*
 ================================================================================
   2. Order Construction
+
+  One constructor per class.  index_p2_type_order and index_q2_type_order share
+  a shape but are deliberately kept separate: the first is the p-inert,
+  ramified-at-p case (Discrd = p^3), the second the q-inert, unramified case
+  (Discrd = p*q^2), and their asserts and failure modes differ.
 ================================================================================
 */
 
-/*
-function inert_quadratic_order(p)
-    if not IsPrime(p) then
-        error "p must be prime";
-    end if;
-
-    // Special case: p = 2
-    if p eq 2 then
-      K := QuadraticField(-3);
-      return MaximalOrder(K);
-    end if;
-
-    q := 3;
-    while true do
-      K := QuadraticField(-q);
-      if KroneckerSymbol(Discriminant(K), p) eq -1 then
-        return MaximalOrder(K);
-      end if;
-      q := NextPrime(q);
-    end while;
-end function;
-*/
-
-// We need maximal orders and each type of submaximal order.
-// (Can reuse Jonathon's code "FiveTypes.magma".)
-
-// Eichler orders of prime level; p = q gives an order of index p.
 function eichler_type_order(p, q)
-    assert IsPrime(p) and IsPrime(q);
+    // Discrd = p*q; taking q = p gives the index-p order (Discrd = p^2).
+    error if not IsPrime(p), "p must be prime";
+    error if not IsPrime(q), "q must be prime";
     return Order(QuaternionOrder(p), q);
 end function;
 
 
 function index_p_type_order(p)
-    assert IsPrime(p);
-    return Order(QuaternionOrder(p), p);
+    // Discrd = p^2.
+    return eichler_type_order(p, p);
 end function;
 
 
-function find_inert_order(p, q)
+function find_inert_discriminant(p, q)
     /*
-      Finds an imaginary quadratic order O in which q is inert such that O
-      embeds into A_{p, infty}.  Any IQO embedding into A is non-split at p,
-      which we check with a Kronecker symbol.
+      Smallest |D| imaginary quadratic discriminant D with
+        * q inert in the maximal order of discriminant D, and
+        * p non-split (so that the order embeds into B_{p,infty}).
+      When p = q the single condition is that p be inert.
+
+      Returns D and the field Q(sqrt(d)), d = squarefree part of D.
     */
-    if not IsPrime(p) then
-        error "p must be prime.";
-    elif not IsPrime(q) then
-        error "q must be prime.";
-    end if;
+    error if not IsPrime(p), "p must be prime";
+    error if not IsPrime(q), "q must be prime";
 
     n := 1;
     while true do
-        if not IsSquarefree(n) then
-            n +:= 1;
-            continue;
-        end if;
-        D := -n;
-        if D mod 4 eq 1 then
-            disc := D;
-        else
-            disc := 4*D;
-        end if;
+        if IsSquarefree(n) then
+            d := -n;
+            D := (d mod 4 eq 1) select d else 4*d;
 
-        if p ne q then  // we want q inert and p non-split
-            if KroneckerSymbol(disc, q) ne -1 then n +:= 1; continue; end if;
-            if KroneckerSymbol(disc, p) eq  1 then n +:= 1; continue; end if;
-        else            // p = q and we want p inert
-            if KroneckerSymbol(disc, p) ne -1 then n +:= 1; continue; end if;
-        end if;
+            if p eq q then
+                good := KroneckerSymbol(D, p) eq -1;          // p inert
+            else
+                good := (KroneckerSymbol(D, q) eq -1)         // q inert
+                        and (KroneckerSymbol(D, p) ne 1);     // p non-split
+            end if;
 
-        return disc, QuadraticOrder(QuadraticForms(disc)), QuadraticField(D);
+            if good then
+                return D, QuadraticField(d);
+            end if;
+        end if;
+        n +:= 1;
     end while;
-
-    return 0, 0, 0;
 end function;
 
 
 function index_p2_type_order(p)
-    D, R, K := find_inert_order(p, p);  // p is inert in R
+    /*
+      O = Z[mu] + p*O_max, with p inert in Z[mu] = O_K and O_max maximal.
+
+      p is ramified in B_{p,infty}, so O_max/p*O_max has order p^4 while the
+      image of Z[mu] is the residue field F_{p^2}; the index is p^2 and
+      Discrd(O) = p^3.
+    */
+    D, K := find_inert_discriminant(p, p);
     A := QuaternionAlgebra(p);
     mu_0 := Embed(K, A);
     d := SquarefreeFactorization(D);
-    mu := (d mod 4 eq 1) select (1 + mu_0)/2 else mu_0;  // generator of O_K
+    mu := (d mod 4 eq 1) select (1 + mu_0)/2 else mu_0;   // generator of O_K
 
-    // To get a quaternion order we want a basis element not commuting with mu.
-    basis_A := Basis(A);
-    nu := [b : b in basis_A | mu*b ne b*mu][1];
+    // A basis element of A that does not commute with mu.
+    nu := rep{ b : b in Basis(A) | mu*b ne b*mu };
 
-    // Clear out any denominators.
+    // Scale nu until the four products span an order (clears denominators).
     m := 1;
+    O_0 := 0;
     repeat
         ok := true;
         try
             O_0 := QuaternionOrder([A | 1, mu, m*nu, mu*(m*nu)]);
         catch e
             ok := false;
+            m +:= 1;
         end try;
-        if ok then break; end if;
-        m +:= 1;
-    until false;
+    until ok;
 
     O_max := MaximalOrder(O_0);
-    O := QuaternionOrder([A | 1, mu] cat [A | p*(A!b) : b in Basis(O_max)]);
-    // IsBass(O);
+    O := QuaternionOrder([A | 1, mu] cat [A | p*(A ! b) : b in Basis(O_max)]);
+    assert Discriminant(O) eq p^3;
     return O;
 end function;
 
 
 function index_q2_type_order(p, q)
-    D, R, K := find_inert_order(p, q);  // q is inert in R and p is not split
+    /*
+      O = Z[mu] + q*O_max, with q inert in Z[mu] = O_K and O_max maximal.
+
+      q is unramified in B_{p,infty}, so O_max/q*O_max = M_2(F_q) and the image
+      of Z[mu] is the quadratic subfield F_{q^2}; the index is q^2 and
+      Discrd(O) = p*q^2.
+    */
+    error if q eq p, "q must differ from p; use index_p2_type_order instead";
+
+    D, K := find_inert_discriminant(p, q);
     A := QuaternionAlgebra(p);
     mu_0 := Embed(K, A);
     d := SquarefreeFactorization(D);
-    mu := (d mod 4 eq 1) select (1 + mu_0)/2 else mu_0;  // generator of O_K
+    mu := (d mod 4 eq 1) select (1 + mu_0)/2 else mu_0;   // generator of O_K
 
-    // To get a quaternion order we want a basis element not commuting with mu.
-    basis_A := Basis(A);
-    nu := [b : b in basis_A | mu*b ne b*mu][1];
+    // A basis element of A that does not commute with mu.
+    nu := rep{ b : b in Basis(A) | mu*b ne b*mu };
 
-    // Clear out any denominators.
+    // Scale nu until the four products span an order (clears denominators).
     m := 1;
+    O_0 := 0;
     repeat
         ok := true;
         try
             O_0 := QuaternionOrder([A | 1, mu, m*nu, mu*(m*nu)]);
         catch e
             ok := false;
+            m +:= 1;
         end try;
-        if ok then break; end if;
-        m +:= 1;
-    until false;
+    until ok;
 
     O_max := MaximalOrder(O_0);
-    O := QuaternionOrder([A | 1, mu] cat [A | q*(A!b) : b in Basis(O_max)]);
-    // IsBass(O);
+    O := QuaternionOrder([A | 1, mu] cat [A | q*(A ! b) : b in Basis(O_max)]);
+    assert Discriminant(O) eq p*q^2;
     return O;
 end function;
 
 
-function random_walk(O : steps := 10)
-    for i in [1..steps] do
-        n := Random([2, 3, 5, 7, 11, 13, 17, 19, 23, 29]);
-        B := Basis(O);
-        for j in [1..4] do
-            B[j] := n*B[j];
-        end for;
-        I := RightIdeal(O, B);
-        O := LeftOrder(I);
+function order_of_type(type, p, q)
+    // Dispatcher.  q is ignored for the classes with no auxiliary level prime.
+    case normalise_type(type):
+        when "maximal":  return QuaternionOrder(p);
+        when "index_p":  return index_p_type_order(p);
+        when "index_p2": return index_p2_type_order(p);
+        when "index_q":  return eichler_type_order(p, q);
+        when "index_q2": return index_q2_type_order(p, q);
+    end case;
+    error "order_of_type: unreachable";
+end function;
+
+
+function random_neighbour(O, n : coeff_bound := 10, tries := 1000)
+    /*
+      One step of a random walk: pick a left O-ideal I of reduced norm n and
+      return RightOrder(I).
+
+      Requiring gcd(n, Discrd(O)) = 1 forces I to be locally principal
+      (O is maximal at every prime dividing n, and I_v = O_v elsewhere), hence
+      RightOrder(I)_v = alpha_v^{-1} O_v alpha_v for all v.  So RightOrder(I)
+      lies in the same genus as O: same reduced discriminant, same local type.
+      This is what makes it safe to feed the result to check_bound_error.
+    */
+    error if not IsPrime(n), "step length must be prime";
+    error if GCD(n, Integers() ! Discriminant(O)) ne 1,
+        "step prime must be coprime to Discrd(O)";
+
+    for t in [1 .. tries] do
+        alpha := Random(O, coeff_bound);
+        nrm := Integers() ! Norm(alpha);
+        if nrm eq 0 or nrm mod n ne 0 then
+            continue;
+        end if;
+        I := lideal< O | alpha, O ! n >;
+        if Norm(I) eq n then
+            return RightOrder(I);
+        end if;
+    end for;
+    error Sprintf("random_neighbour: no ideal of norm %o found in %o tries",
+                  n, tries);
+end function;
+
+
+function random_walk(O : steps := 10, walk_primes := DEFAULT_WALK_PRIMES,
+                         coeff_bound := 10)
+    /*
+      Randomise O within its genus by walking `steps` ideal steps.
+      Step primes dividing Discrd(O) are dropped (see random_neighbour).
+    */
+    if steps le 0 then
+        return O;
+    end if;
+    D := Integers() ! Discriminant(O);
+    usable := [ n : n in walk_primes | GCD(n, D) eq 1 ];
+    error if IsEmpty(usable), "no walk prime is coprime to Discrd(O)";
+
+    for i in [1 .. steps] do
+        O := random_neighbour(O, Random(usable) : coeff_bound := coeff_bound);
     end for;
     return O;
 end function;
 
 
+function random_order_of_type(type, p, q : steps := -1, l := 2,
+                                           coeff_bound := 10)
+    /*
+      A random order of the given class: build the base order, then walk it
+      through its genus.  steps < 0 uses ceil(log_l p).
+    */
+    if steps lt 0 then
+        steps := Ceiling(Log(l, p));
+    end if;
+    return random_walk(order_of_type(type, p, q)
+                       : steps := steps, coeff_bound := coeff_bound);
+end function;
+
+
 /*
 ================================================================================
-  3. Data Printing Functions
+  3. Bound Error
 ================================================================================
 */
 
+function order_shape(O, p)
+    /*
+      Classify O from Discrd(O) = p*M.  Returns
+          class label, level prime q, mass correction factor, # genus vectors.
+
+      NB the tests are ordered so that M = p (Eichler of level p) and M = p^2
+      are caught before the generic prime / prime-square tests.
+    */
+    D := Integers() ! Discriminant(O);
+    error if D mod p ne 0, "p must divide Discrd(O)";
+    M := D div p;
+
+    if M eq 1 then
+        return "maximal", 1, 1, 1;              // Discrd = p
+    elif M eq p then
+        return "index_p", p, p + 1, 2;          // Discrd = p^2
+    elif M eq p^2 then
+        return "index_p2", p, p^2, 1;           // Discrd = p^3
+    elif IsPrime(M) then
+        return "index_q", M, M + 1, 1;          // Discrd = p*q
+    end if;
+
+    F := Factorisation(M);
+    error if #F ne 1 or F[1][2] ne 2,
+        Sprintf("unsupported reduced discriminant %o", D);
+    q := F[1][1];
+    return "index_q2", q, q*(q - 1), 1;         // Discrd = p*q^2
+end function;
+
+
+function hecke_eigenvalue(O, p, l, k)
+    // lambda_{l^k}(e) for the genus vector e attached to O.
+    D := Integers() ! Discriminant(O);
+    if D mod l ne 0 then                        // O maximal at l
+        return (l^(k+1) - 1) div (l - 1);
+    elif D div p eq l then                      // level exactly l
+        return -1 + 2*((l^(k+1) - 1) div (l - 1));
+    else                                        // level l^2
+        return l^k - l;
+    end if;
+end function;
+
+
+function check_bound_error(O, p, l, k : prec := 30)
+    /*
+      eps_{l^k}(O) as defined in the header.  eps <= 1 iff the two-sided bound
+      holds for this particular O.
+    */
+    error if l eq p,
+        "l must not be ramified in the quaternion algebra containing O";
+    error if k le 0, "k must be positive (the normalisation carries a factor k)";
+
+    _, _, correction, num_genus_vectors := order_shape(O, p);
+
+    // lambda_0(e), figure (22): phi(disc A)/24 times the correction factor.
+    lambda_0_e := correction*EulerPhi(Discriminant(QuaternionAlgebra(O)))/24;
+    lambda_lk_e := hecke_eigenvalue(O, p, l, k);
+
+    if num_genus_vectors eq 2 then
+        glk := (lambda_lk_e/lambda_0_e)*(1 + JacobiSymbol(l^k, p));
+    else
+        glk := lambda_lk_e/lambda_0_e;
+    end if;
+
+    alk := count_prime_power_norm(O, l, k);
+
+    // l^((k+2)/2) computed as a square root: a rational exponent on an integer
+    // base is not a legal Magma power.
+    R := RealField(prec);
+    return AbsoluteValue(R ! (alk - glk))
+           / (2*k*Sqrt(R ! l^(k+2))*#Units(O));
+end function;
+
+
 /*
-  Bound-error output: one tuple per prime,
+================================================================================
+  4. Batteries
+
+  bound_error_samples runs one battery and returns EVERY observation; the
+  reducers below turn a battery into a single number.  Reporting the maximum
+  rather than the mean is the sharp test: the mean over a genus can sit
+  comfortably below 1 while individual orders in that genus violate the bound.
+================================================================================
+*/
+
+function choose_q(p, l, q_candidates)
+    cands := [x : x in q_candidates | x ne p and x ne l];
+    error if IsEmpty(cands), "no admissible auxiliary prime q";
+    return Random(cands);
+end function;
+
+
+function bound_error_samples(type, p, l, k
+        : trials := 5, q := 0, steps := -1,
+          q_candidates := DEFAULT_Q_CANDIDATES, coeff_bound := 10, prec := 30)
+    /*
+      A battery: `trials` independent observations of eps_{l^k}(O'), one per
+      randomly generated order O' of the given class.
+
+      steps < 0  -> use ceil(log_l p)
+      q     = 0  -> draw a fresh auxiliary prime from q_candidates
+    */
+    type := normalise_type(type);
+    error if trials lt 1, "trials must be at least 1";
+
+    if steps lt 0 then
+        steps := Ceiling(Log(l, p));
+    end if;
+    if q eq 0 then
+        q := choose_q(p, l, q_candidates);
+    end if;
+    error if (q eq p) and (type in ["index_q", "index_q2"]),
+        "auxiliary prime q must differ from p";
+
+    return [ check_bound_error(
+                 random_order_of_type(type, p, q
+                     : steps := steps, l := l, coeff_bound := coeff_bound),
+                 p, l, k : prec := prec)
+             : j in [1 .. trials] ];
+end function;
+
+
+function sample_mean(S)
+    error if IsEmpty(S), "empty sample";
+    return (&+S)/#S;
+end function;
+
+
+function count_violations(S)
+    // Number of observations with eps > 1, i.e. failures of the bound.
+    return #[x : x in S | x gt 1];
+end function;
+
+
+function bound_statistic(S, stat)
+    case stat:
+        when "mean": return sample_mean(S);
+        when "max":  return Max(S);
+        when "min":  return Min(S);
+    end case;
+    error Sprintf("unknown statistic \"%o\"; expected mean, max or min", stat);
+end function;
+
+
+/*
+  ------------------------------------------------------------------------------
+  THE MAX-VALUE BATTERY
+  ------------------------------------------------------------------------------
+  Fix a prime p, a prime l, an exponent k, and a class N (1..5, or the string
+  label).  Generate `trials` random orders of that class -- 5 by default -- and
+  return the largest eps among them.
+
+  Returns four values, so a bare assignment picks up the maximum alone:
+      max eps, index of the sample attaining it, # violations, full sample list.
+*/
+function max_bound_battery(p, l, k, N
+        : trials := 5, q := 0, steps := -1,
+          q_candidates := DEFAULT_Q_CANDIDATES, coeff_bound := 10, prec := 30)
+    S := bound_error_samples(N, p, l, k
+            : trials := trials, q := q, steps := steps,
+              q_candidates := q_candidates, coeff_bound := coeff_bound,
+              prec := prec);
+    worst, position := Max(S);
+    return worst, position, count_violations(S), S;
+end function;
+
+
+function bound_test(type, p, l, k
+        : stat := "mean", trials := 5, q := 0, steps := -1,
+          q_candidates := DEFAULT_Q_CANDIDATES, coeff_bound := 10, prec := 30)
+    /*
+      Run one battery and reduce it.  Returns three values:
+          <chosen statistic>, <maximum observation>, <number of violations>.
+      stat := "mean" reproduces the old bound_test_* behaviour.
+    */
+    S := bound_error_samples(type, p, l, k
+            : trials := trials, q := q, steps := steps,
+              q_candidates := q_candidates, coeff_bound := coeff_bound,
+              prec := prec);
+    return bound_statistic(S, stat), Max(S), count_violations(S);
+end function;
+
+
+/*
+================================================================================
+  5. Printing
+================================================================================
+*/
+
+procedure emit(s, filename, verbose)
+    if verbose then
+        print s;
+    end if;
+    if filename ne "" then
+        f := Open(filename, "a");
+        fprintf f, "%o\n", s;
+        delete f;
+    end if;
+end procedure;
+
+
+/*
+  Bound-error line, one per prime (unchanged shape, still Python-parsable):
       (p, l, k_min, k_max, [err_{k_min}, ..., err_{k_max}])
 */
-
-procedure print_python_bound_result(p, l, k_min, k_max, result)
+function format_bound_result(p, l, k_min, k_max, result)
     s := Sprintf("(%o, %o, %o, %o, [", p, l, k_min, k_max);
-
-    for i in [1..#result] do
+    for i in [1 .. #result] do
         s cat:= Sprintf("%.2o", result[i]);
         if i lt #result then
             s cat:= ", ";
         end if;
     end for;
+    return s cat "])";
+end function;
 
-    s cat:= "])";
-    print s;
+
+procedure print_python_bound_result(p, l, k_min, k_max, result)
+    emit(format_bound_result(p, l, k_min, k_max, result), "", true);
 end procedure;
 
 
 procedure write_python_bound_result_to_file(p, l, k_min, k_max, result, filename)
-    f := Open(filename, "a");
-    s := Sprintf("(%o, %o, %o, %o, [", p, l, k_min, k_max);
-
-    for i in [1..#result] do
-        s cat:= Sprintf("%.2o", result[i]);
-        if i lt #result then
-            s cat:= ", ";
-        end if;
-    end for;
-
-    s cat:= "])";
-    fprintf f, "%o\n", s;
-    delete f;
+    emit(format_bound_result(p, l, k_min, k_max, result), filename, false);
 end procedure;
+
+
+/*
+  Max-battery line, one per prime:
+      (p, l, k, N, max_err, violations)
+*/
+function format_max_battery_result(p, l, k, N, max_err, violations)
+    return Sprintf("(%o, %o, %o, %o, %.4o, %o)", p, l, k, N, max_err, violations);
+end function;
+
+
+/*
+  Worst-over-a-k-range line, one per prime:
+      (p, l, k_argmax, max_err, violations)
+*/
+function format_worst_result(p, l, k_star, max_err, violations)
+    return Sprintf("(%o, %o, %o, %.4o, %o)", p, l, k_star, max_err, violations);
+end function;
 
 
 /*
   Generation output: one Python list of triples for the whole sweep,
       [(p, l, check_value), ...]
-  where check_value is 0 or 1.  `data` is a sequence of triples [p, l, c].
+  with check_value in {0, 1}.  `data` is a sequence of triples [p, l, c].
 */
-
-procedure print_python_generation_result(data)
+function format_generation_result(data)
     s := "[";
-
-    for i in [1..#data] do
+    for i in [1 .. #data] do
         s cat:= Sprintf("(%o, %o, %o)", data[i][1], data[i][2], data[i][3]);
         if i lt #data then
             s cat:= ", ";
         end if;
     end for;
+    return s cat "]";
+end function;
 
-    s cat:= "]";
-    print s;
+
+procedure print_python_generation_result(data)
+    emit(format_generation_result(data), "", true);
 end procedure;
 
 
 procedure write_python_generation_result_to_file(data, filename)
-    f := Open(filename, "a");
-    s := "[";
-
-    for i in [1..#data] do
-        s cat:= Sprintf("(%o, %o, %o)", data[i][1], data[i][2], data[i][3]);
-        if i lt #data then
-            s cat:= ", ";
-        end if;
-    end for;
-
-    s cat:= "]";
-    fprintf f, "%o\n", s;
-    delete f;
+    emit(format_generation_result(data), filename, false);
 end procedure;
 
 
 /*
 ================================================================================
-  4. Single-Prime Tests
+  6. Sweeps
 ================================================================================
 */
 
-function bound_test_maximal(p, l, k : trials := 5, steps := Ceiling(Log(l, p)))
-    O := QuaternionOrder(p);
-    out := 0;
-    for j in [1..trials] do
-        Oprime := random_walk(O : steps := steps);
-        out +:= check_bound_error(Oprime, p, l, k);
-    end for;
-    return out/trials;
-end function;
+/*
+  Run the max-value battery at fixed l, k and class N for every prime p in
+  [p_min, p_max].  One line per p:
+      (p, l, k, N, max_err, violations)
+*/
+procedure sweep_max_bound_battery(p_min, p_max, l, k, N
+        : trials := 5, q := 0, q_candidates := DEFAULT_Q_CANDIDATES,
+          coeff_bound := 10, filename := "", verbose := true,
+          progress := false, prec := 10)
+    R := RealField(prec);
+    type := normalise_type(N);
+    p := NextPrime(p_min - 1);
+    while p le p_max do
+        if p ne l then
+            worst, position, violations := max_bound_battery(p, l, k, type
+                    : trials := trials, q := q, q_candidates := q_candidates,
+                      coeff_bound := coeff_bound);
+            emit(format_max_battery_result(p, l, k, type, R ! worst, violations),
+                 filename, verbose);
+            if progress then
+                printf "p = %o, class %o: max eps = %.4o (sample %o of %o), %o violation(s)\n",
+                    p, type, R ! worst, position, trials, violations;
+            end if;
+        end if;
+        p := NextPrime(p);
+    end while;
+end procedure;
 
 
-function bound_test_submaximal_index_p(p, l, k
-        : trials := 5, steps := Ceiling(Log(l, p)))
-    O := index_p_type_order(p);
-    out := 0;
-    for j in [1..trials] do
-        Oprime := random_walk(O : steps := steps);
-        out +:= check_bound_error(Oprime, p, l, k);
-    end for;
-    return out/trials;
-end function;
+/*
+  One sweep procedure for all five classes and all statistics.
+
+    type   -- an entry of ORDER_TYPES, or its numeric label N
+    stat   -- "mean" (old behaviour), "max" (worst case), or "min"
+    q      -- 0 means "fresh random auxiliary prime for each p, held fixed
+              across the whole k-range"; a nonzero q pins it for the sweep.
+
+  Output shape is identical to the old sweep_bound_test_* procedures, so the
+  existing Python side keeps working; only the meaning of the entries changes
+  when stat ne "mean".
+*/
+procedure sweep_bound_test(type, p_min, p_max, l, k_min, k_max
+        : stat := "mean", trials := 5, q := 0,
+          q_candidates := DEFAULT_Q_CANDIDATES, coeff_bound := 10,
+          filename := "", verbose := true, progress := false, prec := 10)
+    R := RealField(prec);
+    type := normalise_type(type);
+    p := NextPrime(p_min - 1);
+    while p le p_max do
+        if p ne l then
+            qp := (q eq 0) select choose_q(p, l, q_candidates) else q;
+            steps := Ceiling(Log(l, p));
+            result := [];
+            total_violations := 0;
+
+            for k in [k_min .. k_max] do
+                v, _, viol := bound_test(type, p, l, k
+                        : stat := stat, trials := trials, q := qp,
+                          steps := steps, coeff_bound := coeff_bound);
+                Append(~result, R ! v);
+                total_violations +:= viol;
+            end for;
+
+            emit(format_bound_result(p, l, k_min, k_max, result),
+                 filename, verbose);
+            if progress then
+                printf "p = %o, q = %o, stat = %o, violations = %o\n",
+                    p, qp, stat, total_violations;
+            end if;
+        end if;
+        p := NextPrime(p);
+    end while;
+end procedure;
 
 
-function bound_test_submaximal_index_p2(p, l, k
-        : trials := 5, steps := Ceiling(Log(l, p)))
-    O := index_p2_type_order(p);
-    out := 0;
-    for j in [1..trials] do
-        Oprime := random_walk(O : steps := steps);
-        out +:= check_bound_error(Oprime, p, l, k);
-    end for;
-    return out/trials;
-end function;
+/*
+  Worst-case sweep over a whole k-range: for each p, report the largest eps
+  observed over all trials and all k, the k where it happened, and the number
+  of observations that broke the bound.
+*/
+procedure sweep_bound_test_worst(type, p_min, p_max, l, k_min, k_max
+        : trials := 5, q := 0, q_candidates := DEFAULT_Q_CANDIDATES,
+          coeff_bound := 10, filename := "", verbose := true,
+          progress := false, prec := 10)
+    R := RealField(prec);
+    type := normalise_type(type);
+    p := NextPrime(p_min - 1);
+    while p le p_max do
+        if p ne l then
+            qp := (q eq 0) select choose_q(p, l, q_candidates) else q;
+            steps := Ceiling(Log(l, p));
 
+            best := R ! 0;
+            k_star := k_min;
+            violations := 0;
 
-function bound_test_submaximal_index_q(p, l, k
-        : trials := 5, q := Random(sweep_q_candidates),
-          steps := Ceiling(Log(l, p)))
-    O := eichler_type_order(p, q);
-    out := 0;
-    for j in [1..trials] do
-        Oprime := random_walk(O : steps := steps);
-        out +:= check_bound_error(Oprime, p, l, k);
-    end for;
-    return out/trials;
-end function;
+            for k in [k_min .. k_max] do
+                S := bound_error_samples(type, p, l, k
+                        : trials := trials, q := qp, steps := steps,
+                          coeff_bound := coeff_bound);
+                m := R ! Max(S);
+                violations +:= count_violations(S);
+                if m gt best then
+                    best := m;
+                    k_star := k;
+                end if;
+            end for;
 
-
-function bound_test_submaximal_index_q2(p, l, k
-        : trials := 5, q := Random(sweep_q_candidates),
-          steps := Ceiling(Log(l, p)))
-    O := index_q2_type_order(p, q);
-    out := 0;
-    for j in [1..trials] do
-        Oprime := random_walk(O : steps := steps);
-        out +:= check_bound_error(Oprime, p, l, k);
-    end for;
-    return out/trials;
-end function;
-
-
-function phase_change_approximation_data(l)
-    // Intakes a prime l and returns a prime p and an integer k such that every
-    // maximal order in B_{p, infty} is generated by its elements of norm l^k.
-    p_o := 1 + l^(30)/3;
-    p := NextPrime(Ceiling(p_o));
-    k := Ceiling(2.5*Log(3*p - 3, l));
-    return p, k;
-end function;
-
-
-function main_thm_phase_change_check(l)
-    // Warning: this will break on 32 bit versions of Magma.
-    p, k := phase_change_approximation_data(l);
-    A := QuaternionAlgebra(p);
-    O := MaximalOrder(A);
-    if prime_power_norm_generates(O, l, k) then
-        return count_prime_power_norm(O, l, k);
-    else
-        return false;
-    end if;
-end function;
+            emit(format_worst_result(p, l, k_star, best, violations),
+                 filename, verbose);
+            if progress then
+                printf "p = %o, q = %o: worst eps = %.4o at k = %o (%o violation(s))\n",
+                    p, qp, best, k_star, violations;
+            end if;
+        end if;
+        p := NextPrime(p);
+    end while;
+end procedure;
 
 
 /*
 ================================================================================
-  5. Sweeps
+  7. Generation Experiments
 ================================================================================
 */
 
-procedure sweep_bound_test_maximal(p_min, p_max, l, k_min, k_max
-        : trials := 5, filename := "", verbose := true, prec := 10)
-    R := RealField(prec);
-    p := NextPrime(p_min - 1);
-    while p le p_max do
-        if p ne l then
-            steps := Ceiling(Log(l, p));
-            result := [];
-            for k in [k_min .. k_max] do
-                Append(~result,
-                    R ! bound_test_maximal(p, l, k : trials := trials, steps := steps));
-            end for;
-            if verbose then
-                print_python_bound_result(p, l, k_min, k_max, result);
-            end if;
-            if filename ne "" then
-                write_python_bound_result_to_file(p, l, k_min, k_max, result, filename);
-            end if;
-        end if;
-        p := NextPrime(p);
-    end while;
-end procedure;
-
-
-procedure sweep_bound_test_submaximal_index_p(p_min, p_max, l, k_min, k_max
-        : trials := 5, filename := "", verbose := true, prec := 10)
-    R := RealField(prec);
-    p := NextPrime(p_min - 1);
-    while p le p_max do
-        if p ne l then
-            steps := Ceiling(Log(l, p));
-            result := [];
-            for k in [k_min .. k_max] do
-                Append(~result,
-                    R ! bound_test_submaximal_index_p(p, l, k : trials := trials, steps := steps));
-            end for;
-            if verbose then
-                print_python_bound_result(p, l, k_min, k_max, result);
-            end if;
-            if filename ne "" then
-                write_python_bound_result_to_file(p, l, k_min, k_max, result, filename);
-            end if;
-        end if;
-        p := NextPrime(p);
-    end while;
-end procedure;
-
-
-procedure sweep_bound_test_submaximal_index_p2(p_min, p_max, l, k_min, k_max
-        : trials := 5, filename := "", verbose := true, prec := 10)
-    R := RealField(prec);
-    p := NextPrime(p_min - 1);
-    while p le p_max do
-        if p ne l then
-            steps := Ceiling(Log(l, p));
-            result := [];
-            for k in [k_min .. k_max] do
-                Append(~result,
-                    R ! bound_test_submaximal_index_p2(p, l, k : trials := trials, steps := steps));
-            end for;
-            if verbose then
-                print_python_bound_result(p, l, k_min, k_max, result);
-            end if;
-            if filename ne "" then
-                write_python_bound_result_to_file(p, l, k_min, k_max, result, filename);
-            end if;
-        end if;
-        p := NextPrime(p);
-    end while;
-end procedure;
+function diameter_bound_k(p, l)
+    // Sebastian & Sebastiano diameter bound.
+    return 1 + 2*Ceiling(Log(l, (p - 1)/Sqrt(6)));
+end function;
 
 
 /*
-  q := 0 means "choose a fresh random auxiliary prime for each p, held fixed
-  across the whole k-range"; supplying q pins it for the entire sweep.
-*/
-procedure sweep_bound_test_submaximal_index_q(p_min, p_max, l, k_min, k_max
-        : trials := 5, q := 0, filename := "", verbose := true, prec := 10)
-    R := RealField(prec);
-    p := NextPrime(p_min - 1);
-    while p le p_max do
-        if p ne l then
-            candidates := [x : x in sweep_q_candidates | x ne p and x ne l];
-            qp := (q eq 0) select Random(candidates) else q;
-            error if qp eq p, "auxiliary prime q must differ from p";
-            steps := Ceiling(Log(l, p));
-            result := [];
-            for k in [k_min .. k_max] do
-                Append(~result,
-                    R ! bound_test_submaximal_index_q(p, l, k
-                            : trials := trials, q := qp, steps := steps));
-            end for;
-            if verbose then
-                print_python_bound_result(p, l, k_min, k_max, result);
-            end if;
-            if filename ne "" then
-                write_python_bound_result_to_file(p, l, k_min, k_max, result, filename);
-            end if;
-        end if;
-        p := NextPrime(p);
-    end while;
-end procedure;
+  Check the heuristic that a uniformly random maximal order in B_{p,infty} is
+  generated by its elements of norm l^k, with k = diameter_bound_k(p, l).
 
-
-procedure sweep_bound_test_submaximal_index_q2(p_min, p_max, l, k_min, k_max
-        : trials := 5, q := 0, filename := "", verbose := true, prec := 10)
-    R := RealField(prec);
-    p := NextPrime(p_min - 1);
-    while p le p_max do
-        if p ne l then
-            candidates := [x : x in sweep_q_candidates | x ne p and x ne l];
-            qp := (q eq 0) select Random(candidates) else q;
-            error if qp eq p, "auxiliary prime q must differ from p";
-            steps := Ceiling(Log(l, p));
-            result := [];
-            for k in [k_min .. k_max] do
-                Append(~result,
-                    R ! bound_test_submaximal_index_q2(p, l, k
-                            : trials := trials, q := qp, steps := steps));
-            end for;
-            if verbose then
-                print_python_bound_result(p, l, k_min, k_max, result);
-            end if;
-            if filename ne "" then
-                write_python_bound_result_to_file(p, l, k_min, k_max, result, filename);
-            end if;
-        end if;
-        p := NextPrime(p);
-    end while;
-end procedure;
-
-
-/*
-  Check the heuristic that a uniformly random maximal order in A_{p, infty} is
-  generated by its elements of norm l^k for k = 2*ceil(log_l(p)) + 1.
-
-  For each prime p in [p_min, p_max] (skipping p = l) we take a random walk of
-  length ceil(log_l(p)) away from QuaternionOrder(p) to randomize the order,
-  then test generation.  Results are collected as triples [p, l, check_value]
-  with check_value in {0, 1} and emitted at the end of the sweep.
-
-  Options:
-    filename -- if nonempty, append the result list to this file
-    verbose  -- print the result list when the sweep finishes
-    progress -- print a line for each prime as it is processed
+  For each prime p in [p_min, p_max] (skipping p = l) we walk ceil(log_l p)
+  steps away from QuaternionOrder(p) to randomise the order, then test
+  generation.  Results are collected as triples [p, l, check_value] with
+  check_value in {0, 1} and emitted at the end of the sweep.
 */
 procedure sweep_check_diameter_generation(p_min, p_max, l
         : filename := "", verbose := true, progress := false)
@@ -627,11 +793,8 @@ procedure sweep_check_diameter_generation(p_min, p_max, l
     p := NextPrime(p_min - 1);
     while p le p_max do
         if p ne l then
-            steps := Ceiling(Log(l, p));
-            //Sebastian & Sebastiano Diameter Bound
-            k := 1 + 2*Ceiling(Log(l, ((p-1)/Sqrt(6))));
-            O := QuaternionOrder(p);
-            O := random_walk(O : steps := steps);
+            k := diameter_bound_k(p, l);
+            O := random_order_of_type("maximal", p, 1 : l := l);
 
             check_value := prime_power_norm_generates(O, l, k) select 1 else 0;
             Append(~data, [p, l, check_value]);
@@ -644,38 +807,72 @@ procedure sweep_check_diameter_generation(p_min, p_max, l
         p := NextPrime(p);
     end while;
 
-    if verbose then
-        print_python_generation_result(data);
-    end if;
-    if filename ne "" then
-        write_python_generation_result_to_file(data, filename);
-    end if;
+    emit(format_generation_result(data), filename, verbose);
 end procedure;
+
+
+function phase_change_approximation_data(l : exponent := 30, factor := 2.5)
+    /*
+      A prime p and an exponent k for which the heuristic predicts that every
+      maximal order in B_{p,infty} is generated by its elements of norm l^k.
+    */
+    p := NextPrime(Ceiling(1 + l^exponent/3));
+    k := Ceiling(factor*Log(l, 3*p - 3));
+    return p, k;
+end function;
+
+
+function main_thm_phase_change_check(l : exponent := 30, factor := 2.5)
+    /*
+      Returns: generates?, a_{l^k}(O) (0 when it does not generate), p, k.
+      Warning: this will break on 32-bit Magma, and the enumeration is large.
+    */
+    p, k := phase_change_approximation_data(l : exponent := exponent,
+                                                factor := factor);
+    O := MaximalOrder(QuaternionAlgebra(p));
+    if prime_power_norm_generates(O, l, k) then
+        return true, count_prime_power_norm(O, l, k), p, k;
+    end if;
+    return false, 0, p, k;
+end function;
 
 
 /*
 ================================================================================
-  6. Scratch / Driver
+  8. Driver / Scratch
 ================================================================================
 */
 
-p := NextPrime(1000);
-l := 2;
-k := 5;
-
-// bound_test_maximal(p, l, k);
-// bound_test_submaximal_index_p(p, l, k);
-// bound_test_submaximal_index_q(p, l, k);
-// bound_test_submaximal_index_q2(p, l, k);
-// bound_test_submaximal_index_p2(p, l, k);
-
+// p := NextPrime(1000); l := 2; k := 5;
+//
+// Max-value battery: 5 random orders of class N, largest eps among them.
+// max_bound_battery(p, l, k, 1);                       // maximal
+// max_bound_battery(p, l, k, 2);                       // index_p
+// max_bound_battery(p, l, k, 3);                       // index_p2
+// max_bound_battery(p, l, k, 4);                       // index_q
+// max_bound_battery(p, l, k, 5);                       // index_q2
+// max_bound_battery(p, l, k, "index_q2" : trials := 20, q := 7);
+//
+// All four return values:
+// worst, position, violations, samples := max_bound_battery(p, l, k, 5);
+//
+// The same battery for every p in an interval:
+// sweep_max_bound_battery(1000, 2000, 2, 5, 1 : progress := true);
+// for N in [1 .. #ORDER_TYPES] do
+//     sweep_max_bound_battery(1000, 2000, 2, 5, N
+//             : filename := Sprintf("max_l2_k5_N%o.txt", N));
+// end for;
+//
+// Mean-based sweeps (old behaviour):
 // p_min := 1000; p_max := 2000; l := 2;
 // k_min := Ceiling(Log(l, p_min)); k_max := 1 + Ceiling(Log(l, p_max));
-// sweep_bound_test_maximal(p_min, p_max, l, k_min, k_max);
-// sweep_bound_test_submaximal_index_p(p_min, p_max, l, k_min, k_max);
-// sweep_bound_test_submaximal_index_p2(p_min, p_max, l, k_min, k_max);
-// sweep_bound_test_submaximal_index_q(p_min, p_max, l, k_min, k_max);
-// sweep_bound_test_submaximal_index_q2(p_min, p_max, l, k_min, k_max);
-
+// for N in [1 .. #ORDER_TYPES] do
+//     sweep_bound_test(N, p_min, p_max, l, k_min, k_max);
+// end for;
+//
+// Worst observation across a whole k-range, one line per p:
+// sweep_bound_test_worst(1, p_min, p_max, l, k_min, k_max : trials := 20);
+//
+// Generation:
 // sweep_check_diameter_generation(100, 500, 2 : progress := true);
 // sweep_check_diameter_generation(100, 500, 2 : filename := "gen_l2.txt");
