@@ -1,0 +1,74 @@
+// ../../../../magma_symlink
+
+
+load "../../../does_generate.magma";
+
+// =============================================================================
+//  Max-bound battery driver: l = 2, all five order classes,
+//  p in [p_min, p_max], k in [k_min, k_max]
+//
+//  Paste into Magma AFTER the experiment file has been loaded, e.g.
+//      load "bound_experiments.m";
+//
+//  Output lines (one per (p, k), appended to the class's file):
+//      (p, l, k, N, max_err, violations)
+// =============================================================================
+
+// ---- Parameters -------------------------------------------------------------
+l      := 2;        // prime dividing the norm: counts elements of norm l^k
+p_min  := 45000;     // interval of primes p
+p_max  := 50000;
+k_min  := 1;        // range of exponents k (k >= 1)
+k_max  := 15;
+trials := 5;        // random orders per (p, k, class); the max over these is reported
+q_aux  := 5;        // auxiliary level prime, used only for index_q / index_q2
+
+// ---- Output files, one per class --------------------------------------------
+FILE_MAXIMAL  := "max_bound_l2_maximal.dat";    // N = 1, Discrd = p
+FILE_INDEX_P  := "max_bound_l2_index_p.dat";    // N = 2, Discrd = p^2
+FILE_INDEX_P2 := "max_bound_l2_index_p2.dat";   // N = 3, Discrd = p^3
+FILE_INDEX_Q  := "max_bound_l2_index_q.dat";    // N = 4, Discrd = p*q,   q = 5
+FILE_INDEX_Q2 := "max_bound_l2_index_q2.dat";   // N = 5, Discrd = p*q^2, q = 5
+
+FILENAMES := [FILE_MAXIMAL, FILE_INDEX_P, FILE_INDEX_P2, FILE_INDEX_Q, FILE_INDEX_Q2];
+
+// ---- Run --------------------------------------------------------------------
+for N in [1 .. #ORDER_TYPES] do
+    for k in [k_min .. k_max] do
+        printf "\n=== class %o (%o), k = %o -> %o ===\n",
+            N, ORDER_TYPES[N], k, FILENAMES[N];
+
+        if N in [4, 5] then
+            // q := 5.  These classes require q ne p, so p = 5 is skipped by
+            // splitting the interval around q_aux.  (p = l = 2 is skipped by
+            // the sweep itself.)  An empty sub-interval is a no-op.
+            sweep_max_bound_battery(p_min, Min(p_max, q_aux - 1), l, k, N
+                    : trials := trials, q := q_aux,
+                      filename := FILENAMES[N], verbose := false, progress := true);
+            sweep_max_bound_battery(Max(p_min, q_aux + 1), p_max, l, k, N
+                    : trials := trials, q := q_aux,
+                      filename := FILENAMES[N], verbose := false, progress := true);
+        else
+            // No auxiliary prime for maximal / index_p / index_p2.
+            sweep_max_bound_battery(p_min, p_max, l, k, N
+                    : trials := trials,
+                      filename := FILENAMES[N], verbose := false, progress := true);
+        end if;
+    end for;
+end for;
+
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";

@@ -1,0 +1,74 @@
+// ../../../../magma_symlink
+
+
+load "../../../does_generate.magma";
+
+// =============================================================================
+//  MEAN-bound battery driver: l = 2, all five order classes,
+//  p in [p_min, p_max], k in [k_min, k_max]
+//
+//  For each (p, class): for every k in [k_min .. k_max], generate `trials`
+//  random orders and average their eps_{l^k}.  One line per p:
+//      (p, l, k_min, k_max, [mean_err_{k_min}, ..., mean_err_{k_max}])
+//  This is the format of the old mean-based sweeps, so the existing Python
+//  parser for those files applies unchanged.
+// =============================================================================
+
+// ---- Parameters -------------------------------------------------------------
+l      := 2;        // prime dividing the norm: counts elements of norm l^k
+p_min  := 1000;    // interval of primes p
+p_max  := 5000;
+k_min  := 1;        // range of exponents k (k >= 1)
+k_max  := 15;
+trials := 5;        // random orders averaged per (p, k, class)
+q_aux  := 5;        // auxiliary level prime, used only for index_q / index_q2
+
+// ---- Output files, one per class --------------------------------------------
+// Named "mean_..." so they never append into the earlier "max_..." files.
+FILE_MAXIMAL  := "mean_bound_l2_maximal.dat";   // N = 1, Discrd = p
+FILE_INDEX_P  := "mean_bound_l2_index_p.dat";   // N = 2, Discrd = p^2
+FILE_INDEX_P2 := "mean_bound_l2_index_p2.dat";  // N = 3, Discrd = p^3
+FILE_INDEX_Q  := "mean_bound_l2_index_q.dat";   // N = 4, Discrd = p*q,   q = 5
+FILE_INDEX_Q2 := "mean_bound_l2_index_q2.dat";  // N = 5, Discrd = p*q^2, q = 5
+
+FILENAMES := [FILE_MAXIMAL, FILE_INDEX_P, FILE_INDEX_P2, FILE_INDEX_Q, FILE_INDEX_Q2];
+
+// ---- Run --------------------------------------------------------------------
+// sweep_bound_test loops over k itself, so there is no k-loop here.
+for N in [1 .. #ORDER_TYPES] do
+    printf "\n=== class %o (%o), k = %o..%o, mean -> %o ===\n",
+        N, ORDER_TYPES[N], k_min, k_max, FILENAMES[N];
+
+    if N in [4, 5] then
+        // q := 5.  These classes require q ne p, so p = 5 is skipped by
+        // splitting the interval around q_aux.  (p = l = 2 is skipped by
+        // the sweep itself.)  An empty sub-interval is a no-op.
+        sweep_bound_test(N, p_min, Min(p_max, q_aux - 1), l, k_min, k_max
+                : stat := "mean", trials := trials, q := q_aux,
+                  filename := FILENAMES[N], verbose := false, progress := true);
+        sweep_bound_test(N, Max(p_min, q_aux + 1), p_max, l, k_min, k_max
+                : stat := "mean", trials := trials, q := q_aux,
+                  filename := FILENAMES[N], verbose := false, progress := true);
+    else
+        // No auxiliary prime for maximal / index_p / index_p2.
+        sweep_bound_test(N, p_min, p_max, l, k_min, k_max
+                : stat := "mean", trials := trials,
+                  filename := FILENAMES[N], verbose := false, progress := true);
+    end if;
+end for;
+
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";
+"done";

@@ -20,6 +20,10 @@
 
   * l is always a prime different from p.  Argument order is always (p, l, k).
 
+  * The auxiliary prime q exists only for the classes in Q_TYPES.  For every
+    other class q is never drawn, never used and never printed.  For the
+    Q_TYPES classes q must differ from both p and l.
+
   * The normalised bound error ("ratio", "eps") is
 
         eps_{l^k}(O) = |a_{l^k}(O) - g_{l^k}(O)|
@@ -38,13 +42,27 @@
 
     Every battery below therefore also reports "violations" = #{eps > 1}.
 
+  * Self-checks inside check_bound_error (see Section 3):
+      - 2*#Enumerate(O, 1, 1) must equal #Units(O); otherwise the +-x
+        convention of Enumerate and the Units count disagree and every eps is
+        off by a constant factor.  The run stops with an error.
+      - For maximal orders, Deligne's bound forces eps < (k+1)/(2*k*l) <= 1/2,
+        so a maximal-order eps above (k+1)/(2*k*l) is a computational error,
+        never a genuine failure of the bound.
+    Every violation (eps > 1), and every maximal-order eps above the Deligne
+    cap, is written with its raw data to VIOLATION_LOG.
+
+  * Randomness: the only use of Random is Random(S) for a sequence S of
+    integers.  Magma has no Random(O, n) for a quaternion order O.  Call
+    SetSeed(n) before a run for reproducible output.
+
   ------------------------------------------------------------------------------
   Section order (definitions precede first use; the file loads top to bottom)
   ------------------------------------------------------------------------------
     0. Configuration
-    1. Auxiliary functions      (norm counting, generation test)
+    1. Auxiliary functions      (norm counting, generation test, formatting)
     2. Order construction       (five classes, random walk)
-    3. Bound error              (mass, Hecke eigenvalue, eps)
+    3. Bound error              (mass, Hecke eigenvalue, eps, self-checks)
     4. Batteries                (samples -> mean / max / violation count)
     5. Printing                 (Python-compatible output)
     6. Sweeps                   (ranges of p)
@@ -70,6 +88,15 @@ DEFAULT_WALK_PRIMES := [2, 3, 5, 7, 11, 13, 17, 19, 23, 29];
 // Class labels; the position in this sequence is the numeric label N.
 ORDER_TYPES := ["maximal", "index_p", "index_p2", "index_q", "index_q2"];
 
+// The classes that carry an auxiliary level prime q.
+Q_TYPES := ["index_q", "index_q2"];
+
+// Violation log: one line per eps > 1, and per maximal-order eps above the
+// Deligne cap.  Line format:
+//   (p, l, k, N, Discrd, a_{l^k}, g_{l^k}, #Units, eps, "tag")
+LOG_VIOLATIONS := true;
+VIOLATION_LOG  := "violations.log";
+
 
 function order_type_name(N)
     // Numeric class label -> string label.
@@ -91,16 +118,41 @@ function normalise_type(type)
 end function;
 
 
+function order_type_index(type)
+    // Integer N or string label -> integer N.
+    return Index(ORDER_TYPES, normalise_type(type));
+end function;
+
+
 /*
 ================================================================================
   1. Auxiliary Functions
 ================================================================================
 */
 
+function fmt_real(x, d)
+    /*
+      Fixed-point decimal string for x with d >= 1 digits after the point,
+      e.g. fmt_real(0.12345, 4) = "0.1235".  Uses integer arithmetic only, so
+      the output is always a plain Python float literal.  Accepts reals and
+      rationals.
+    */
+    sgn := (x lt 0) select "-" else "";
+    n := Round(AbsoluteValue(x)*10^d);
+    ip := n div 10^d;
+    fs := IntegerToString(n mod 10^d);
+    while #fs lt d do
+        fs := "0" cat fs;
+    end while;
+    return sgn cat IntegerToString(ip) cat "." cat fs;
+end function;
+
+
 function count_prime_power_norm(O, l, k)
     /*
       a_{l^k}(O) = #{x in O : Nrd(x) = l^k}, counting x and -x separately.
       Enumerate returns one representative of each pair {x, -x}, hence the 2.
+      (This convention is verified at run time in check_bound_error.)
     */
     error if not IsPrime(l), "l must be prime";
     if k lt 0 then
@@ -208,6 +260,28 @@ function find_inert_discriminant(p, q)
 end function;
 
 
+function order_containing(A, mu, nu)
+    /*
+      An order of A containing mu, obtained from 1, mu, m*nu, mu*(m*nu) for
+      the first m = 1, 2, 3, ... for which QuaternionOrder accepts them.
+      NB: there is no upper bound on m, so this loops forever if no m works.
+    */
+    m := 1;
+    while true do
+        ok := true;
+        try
+            O_0 := QuaternionOrder([A | 1, mu, m*nu, mu*(m*nu)]);
+        catch e
+            ok := false;
+        end try;
+        if ok then
+            return O_0;
+        end if;
+        m +:= 1;
+    end while;
+end function;
+
+
 function index_p2_type_order(p)
     /*
       O = Z[mu] + p*O_max, with p inert in Z[mu] = O_K and O_max maximal.
@@ -225,20 +299,7 @@ function index_p2_type_order(p)
     // A basis element of A that does not commute with mu.
     nu := rep{ b : b in Basis(A) | mu*b ne b*mu };
 
-    // Scale nu until the four products span an order (clears denominators).
-    m := 1;
-    O_0 := 0;
-    repeat
-        ok := true;
-        try
-            O_0 := QuaternionOrder([A | 1, mu, m*nu, mu*(m*nu)]);
-        catch e
-            ok := false;
-            m +:= 1;
-        end try;
-    until ok;
-
-    O_max := MaximalOrder(O_0);
+    O_max := MaximalOrder(order_containing(A, mu, nu));
     O := QuaternionOrder([A | 1, mu] cat [A | p*(A ! b) : b in Basis(O_max)]);
     assert Discriminant(O) eq p^3;
     return O;
@@ -264,20 +325,7 @@ function index_q2_type_order(p, q)
     // A basis element of A that does not commute with mu.
     nu := rep{ b : b in Basis(A) | mu*b ne b*mu };
 
-    // Scale nu until the four products span an order (clears denominators).
-    m := 1;
-    O_0 := 0;
-    repeat
-        ok := true;
-        try
-            O_0 := QuaternionOrder([A | 1, mu, m*nu, mu*(m*nu)]);
-        catch e
-            ok := false;
-            m +:= 1;
-        end try;
-    until ok;
-
-    O_max := MaximalOrder(O_0);
+    O_max := MaximalOrder(order_containing(A, mu, nu));
     O := QuaternionOrder([A | 1, mu] cat [A | q*(A ! b) : b in Basis(O_max)]);
     assert Discriminant(O) eq p*q^2;
     return O;
@@ -297,6 +345,18 @@ function order_of_type(type, p, q)
 end function;
 
 
+function random_order_element(O, coeff_bound)
+    /*
+      A random element of O: integer coefficients drawn uniformly from
+      [-coeff_bound .. coeff_bound] against the Z-basis of O.
+      (Replaces Random(O, coeff_bound), which is not a Magma signature.)
+    */
+    B := [O | b : b in Basis(O)];
+    box := [-coeff_bound .. coeff_bound];
+    return &+[ Random(box)*B[i] : i in [1 .. #B] ];
+end function;
+
+
 function random_neighbour(O, n : coeff_bound := 10, tries := 1000)
     /*
       One step of a random walk: pick a left O-ideal I of reduced norm n and
@@ -304,16 +364,15 @@ function random_neighbour(O, n : coeff_bound := 10, tries := 1000)
 
       Requiring gcd(n, Discrd(O)) = 1 forces I to be locally principal
       (O is maximal at every prime dividing n, and I_v = O_v elsewhere), hence
-      RightOrder(I)_v = alpha_v^{-1} O_v alpha_v for all v.  So RightOrder(I)
-      lies in the same genus as O: same reduced discriminant, same local type.
-      This is what makes it safe to feed the result to check_bound_error.
+      RightOrder(I)_v = alpha_v^{-1} O_v alpha_v for all v.  
+
     */
     error if not IsPrime(n), "step length must be prime";
     error if GCD(n, Integers() ! Discriminant(O)) ne 1,
         "step prime must be coprime to Discrd(O)";
 
     for t in [1 .. tries] do
-        alpha := Random(O, coeff_bound);
+        alpha := random_order_element(O, coeff_bound);
         nrm := Integers() ! Norm(alpha);
         if nrm eq 0 or nrm mod n ne 0 then
             continue;
@@ -390,7 +449,7 @@ function order_shape(O, p)
         return "index_q", M, M + 1, 1;          // Discrd = p*q
     end if;
 
-    F := Factorisation(M);
+    F := Factorisation(M); // M = q^2
     error if #F ne 1 or F[1][2] ne 2,
         Sprintf("unsupported reduced discriminant %o", D);
     q := F[1][1];
@@ -399,7 +458,12 @@ end function;
 
 
 function hecke_eigenvalue(O, p, l, k)
-    // lambda_{l^k}(e) for the genus vector e attached to O.
+    /*
+      lambda_{l^k}(e) for the genus vector e attached to O.
+      The batteries enforce l ne p and q ne l, so l never divides Discrd(O)
+      there and only the first branch is reached; the other two branches are
+      kept for direct calls with l | Discrd(O).
+    */
     D := Integers() ! Discriminant(O);
     if D mod l ne 0 then                        // O maximal at l
         return (l^(k+1) - 1) div (l - 1);
@@ -415,15 +479,29 @@ function check_bound_error(O, p, l, k : prec := 30)
     /*
       eps_{l^k}(O) as defined in the header.  eps <= 1 iff the two-sided bound
       holds for this particular O.
+
+      Self-checks (see header):
+        * stops with an error if 2*#Enumerate(O,1,1) ne #Units(O);
+        * logs every eps > 1, and every maximal-order eps above the Deligne
+          cap (k+1)/(2*k*l), to VIOLATION_LOG with the raw data.
     */
     error if l eq p,
         "l must not be ramified in the quaternion algebra containing O";
     error if k le 0, "k must be positive (the normalisation carries a factor k)";
 
-    _, _, correction, num_genus_vectors := order_shape(O, p);
+    shape, _, correction, num_genus_vectors := order_shape(O, p);
+
+    // Convention check: the units of O are exactly its elements of reduced
+    // norm 1, so the +-x convention of Enumerate must reproduce #Units(O).
+    units := #Units(O);
+    norm_one := 2*#Enumerate(O, 1, 1);
+    error if norm_one ne units,
+        Sprintf("convention mismatch: 2*#Enumerate(O,1,1) = %o but #Units(O) = %o",
+                norm_one, units);
 
     // lambda_0(e), figure (22): phi(disc A)/24 times the correction factor.
-    lambda_0_e := correction*EulerPhi(Discriminant(QuaternionAlgebra(O)))/24;
+    // Every order here lies in B_{p,infty}, whose discriminant is p.
+    lambda_0_e := correction*EulerPhi(p)/24;
     lambda_lk_e := hecke_eigenvalue(O, p, l, k);
 
     if num_genus_vectors eq 2 then
@@ -437,8 +515,25 @@ function check_bound_error(O, p, l, k : prec := 30)
     // l^((k+2)/2) computed as a square root: a rational exponent on an integer
     // base is not a legal Magma power.
     R := RealField(prec);
-    return AbsoluteValue(R ! (alk - glk))
-           / (2*k*Sqrt(R ! l^(k+2))*#Units(O));
+    eps := AbsoluteValue(R ! (alk - glk)) / (2*k*Sqrt(R ! l^(k+2))*units);
+
+    if LOG_VIOLATIONS then
+        tag := "";
+        if eps gt 1 then
+            tag := "violation";
+        end if;
+        if tag ne "" then
+            s := Sprintf("(%o, %o, %o, %o, %o, %o, %o, %o, %o, \"%o\")",
+                         p, l, k, order_type_index(shape),
+                         Integers() ! Discriminant(O), alk, fmt_real(glk, 4),
+                         units, fmt_real(eps, 6), tag);
+            f := Open(VIOLATION_LOG, "a");
+            fprintf f, "%o\n", s;
+            delete f;
+        end if;
+    end if;
+
+    return eps;
 end function;
 
 
@@ -468,7 +563,8 @@ function bound_error_samples(type, p, l, k
       randomly generated order O' of the given class.
 
       steps < 0  -> use ceil(log_l p)
-      q     = 0  -> draw a fresh auxiliary prime from q_candidates
+      q     = 0  -> for the Q_TYPES classes, draw a fresh auxiliary prime from
+                    q_candidates; for every other class q is not used at all.
     */
     type := normalise_type(type);
     error if trials lt 1, "trials must be at least 1";
@@ -476,11 +572,15 @@ function bound_error_samples(type, p, l, k
     if steps lt 0 then
         steps := Ceiling(Log(l, p));
     end if;
-    if q eq 0 then
-        q := choose_q(p, l, q_candidates);
+
+    if type in Q_TYPES then
+        if q eq 0 then
+            q := choose_q(p, l, q_candidates);
+        end if;
+        error if q eq p, "auxiliary prime q must differ from p";
+        error if q eq l,
+            "auxiliary prime q must differ from l (the eps normalisation assumes l does not divide Discrd)";
     end if;
-    error if (q eq p) and (type in ["index_q", "index_q2"]),
-        "auxiliary prime q must differ from p";
 
     return [ check_bound_error(
                  random_order_of_type(type, p, q
@@ -572,11 +672,12 @@ end procedure;
 /*
   Bound-error line, one per prime (unchanged shape, still Python-parsable):
       (p, l, k_min, k_max, [err_{k_min}, ..., err_{k_max}])
+  Entries carry 4 decimals so that small means do not round to 0.00.
 */
 function format_bound_result(p, l, k_min, k_max, result)
     s := Sprintf("(%o, %o, %o, %o, [", p, l, k_min, k_max);
     for i in [1 .. #result] do
-        s cat:= Sprintf("%.2o", result[i]);
+        s cat:= fmt_real(result[i], 4);
         if i lt #result then
             s cat:= ", ";
         end if;
@@ -596,11 +697,12 @@ end procedure;
 
 
 /*
-  Max-battery line, one per prime:
+  Max-battery line, one per prime (N is the NUMERIC class label):
       (p, l, k, N, max_err, violations)
 */
 function format_max_battery_result(p, l, k, N, max_err, violations)
-    return Sprintf("(%o, %o, %o, %o, %.4o, %o)", p, l, k, N, max_err, violations);
+    return Sprintf("(%o, %o, %o, %o, %o, %o)",
+                   p, l, k, order_type_index(N), fmt_real(max_err, 4), violations);
 end function;
 
 
@@ -609,7 +711,8 @@ end function;
       (p, l, k_argmax, max_err, violations)
 */
 function format_worst_result(p, l, k_star, max_err, violations)
-    return Sprintf("(%o, %o, %o, %.4o, %o)", p, l, k_star, max_err, violations);
+    return Sprintf("(%o, %o, %o, %o, %o)",
+                   p, l, k_star, fmt_real(max_err, 4), violations);
 end function;
 
 
@@ -666,8 +769,8 @@ procedure sweep_max_bound_battery(p_min, p_max, l, k, N
             emit(format_max_battery_result(p, l, k, type, R ! worst, violations),
                  filename, verbose);
             if progress then
-                printf "p = %o, class %o: max eps = %.4o (sample %o of %o), %o violation(s)\n",
-                    p, type, R ! worst, position, trials, violations;
+                printf "p = %o, k = %o, class %o: max eps = %o (sample %o of %o), %o violation(s)\n",
+                    p, k, type, fmt_real(worst, 4), position, trials, violations;
             end if;
         end if;
         p := NextPrime(p);
@@ -680,12 +783,12 @@ end procedure;
 
     type   -- an entry of ORDER_TYPES, or its numeric label N
     stat   -- "mean" (old behaviour), "max" (worst case), or "min"
-    q      -- 0 means "fresh random auxiliary prime for each p, held fixed
-              across the whole k-range"; a nonzero q pins it for the sweep.
+    q      -- Q_TYPES classes only: 0 means "fresh random auxiliary prime for
+              each p, held fixed across the whole k-range"; a nonzero q pins
+              it for the sweep.  Ignored (and never printed) otherwise.
 
-  Output shape is identical to the old sweep_bound_test_* procedures, so the
-  existing Python side keeps working; only the meaning of the entries changes
-  when stat ne "mean".
+  The violation count in the progress line is summed over all k in the range
+  and all trials, i.e. out of (k_max - k_min + 1)*trials observations.
 */
 procedure sweep_bound_test(type, p_min, p_max, l, k_min, k_max
         : stat := "mean", trials := 5, q := 0,
@@ -693,10 +796,11 @@ procedure sweep_bound_test(type, p_min, p_max, l, k_min, k_max
           filename := "", verbose := true, progress := false, prec := 10)
     R := RealField(prec);
     type := normalise_type(type);
+    uses_q := type in Q_TYPES;
     p := NextPrime(p_min - 1);
     while p le p_max do
         if p ne l then
-            qp := (q eq 0) select choose_q(p, l, q_candidates) else q;
+            qp := (uses_q and q eq 0) select choose_q(p, l, q_candidates) else q;
             steps := Ceiling(Log(l, p));
             result := [];
             total_violations := 0;
@@ -712,8 +816,13 @@ procedure sweep_bound_test(type, p_min, p_max, l, k_min, k_max
             emit(format_bound_result(p, l, k_min, k_max, result),
                  filename, verbose);
             if progress then
-                printf "p = %o, q = %o, stat = %o, violations = %o\n",
-                    p, qp, stat, total_violations;
+                if uses_q then
+                    printf "p = %o, q = %o, stat = %o, violations = %o\n",
+                        p, qp, stat, total_violations;
+                else
+                    printf "p = %o, stat = %o, violations = %o\n",
+                        p, stat, total_violations;
+                end if;
             end if;
         end if;
         p := NextPrime(p);
@@ -732,10 +841,11 @@ procedure sweep_bound_test_worst(type, p_min, p_max, l, k_min, k_max
           progress := false, prec := 10)
     R := RealField(prec);
     type := normalise_type(type);
+    uses_q := type in Q_TYPES;
     p := NextPrime(p_min - 1);
     while p le p_max do
         if p ne l then
-            qp := (q eq 0) select choose_q(p, l, q_candidates) else q;
+            qp := (uses_q and q eq 0) select choose_q(p, l, q_candidates) else q;
             steps := Ceiling(Log(l, p));
 
             best := R ! 0;
@@ -757,8 +867,13 @@ procedure sweep_bound_test_worst(type, p_min, p_max, l, k_min, k_max
             emit(format_worst_result(p, l, k_star, best, violations),
                  filename, verbose);
             if progress then
-                printf "p = %o, q = %o: worst eps = %.4o at k = %o (%o violation(s))\n",
-                    p, qp, best, k_star, violations;
+                if uses_q then
+                    printf "p = %o, q = %o: worst eps = %o at k = %o (%o violation(s))\n",
+                        p, qp, fmt_real(best, 4), k_star, violations;
+                else
+                    printf "p = %o: worst eps = %o at k = %o (%o violation(s))\n",
+                        p, fmt_real(best, 4), k_star, violations;
+                end if;
             end if;
         end if;
         p := NextPrime(p);
@@ -794,7 +909,7 @@ procedure sweep_check_diameter_generation(p_min, p_max, l
     while p le p_max do
         if p ne l then
             k := diameter_bound_k(p, l);
-            O := random_order_of_type("maximal", p, 1 : l := l);
+            O := random_order_of_type("maximal", p, 0 : l := l);
 
             check_value := prime_power_norm_generates(O, l, k) select 1 else 0;
             Append(~data, [p, l, check_value]);
@@ -843,6 +958,7 @@ end function;
 ================================================================================
 */
 
+// SetSeed(1);                                          // reproducible runs
 // p := NextPrime(1000); l := 2; k := 5;
 //
 // Max-value battery: 5 random orders of class N, largest eps among them.
@@ -860,10 +976,10 @@ end function;
 // sweep_max_bound_battery(1000, 2000, 2, 5, 1 : progress := true);
 // for N in [1 .. #ORDER_TYPES] do
 //     sweep_max_bound_battery(1000, 2000, 2, 5, N
-//             : filename := Sprintf("max_l2_k5_N%o.txt", N));
+//             : filename := Sprintf("max_l2_k5_N%o.dat", N));
 // end for;
 //
-// Mean-based sweeps (old behaviour):
+// Mean-based sweeps:
 // p_min := 1000; p_max := 2000; l := 2;
 // k_min := Ceiling(Log(l, p_min)); k_max := 1 + Ceiling(Log(l, p_max));
 // for N in [1 .. #ORDER_TYPES] do
@@ -875,4 +991,4 @@ end function;
 //
 // Generation:
 // sweep_check_diameter_generation(100, 500, 2 : progress := true);
-// sweep_check_diameter_generation(100, 500, 2 : filename := "gen_l2.txt");
+// sweep_check_diameter_generation(100, 500, 2 : filename := "gen_l2.dat");
